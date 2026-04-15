@@ -17,7 +17,22 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 
+from richard_musonera.views import (
+    register_view,
+    login_view,
+    logout_view,
+    dashboard_view,
+    profile_view,
+    admin_dashboard,
+    instructor_panel,
+    admin_panel
+)
+
 urlpatterns = [
     path('admin/', admin.site.urls),
+
     path('', include('richard_musonera.urls')),
+
+    path('admin-panel/', admin_panel, name='admin_panel'),
 ]
+handler403 = "richard_musonera.views.custom_403"

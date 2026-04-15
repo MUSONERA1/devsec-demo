@@ -2,17 +2,151 @@
 <html>
 <head>
     <title>Dashboard</title>
+
+    <style>
+        body {
+            margin: 0;
+            font-family: "Segoe UI", Arial, sans-serif;
+            background: #f5f7fb;
+            color: #1f2937;
+        }
+
+        /* Top bar */
+        .topbar {
+            background: white;
+            padding: 14px 25px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .brand {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .user {
+            font-size: 14px;
+            color: #6b7280;
+        }
+
+        /* Layout */
+        .container {
+            max-width: 1000px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+
+        /* Grid cards */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 20px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 14px;
+            padding: 20px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.05);
+            transition: 0.2s;
+        }
+
+        .card:hover {
+            transform: translateY(-3px);
+        }
+
+        .card h3 {
+            margin: 0 0 10px 0;
+            font-size: 16px;
+        }
+
+        .card p {
+            margin: 0;
+            color: #6b7280;
+            font-size: 14px;
+        }
+
+        /* Buttons */
+        .actions {
+            margin-top: 25px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            text-decoration: none;
+            padding: 10px 14px;
+            border-radius: 10px;
+            font-size: 14px;
+            color: white;
+            background: #2563eb;
+            transition: 0.2s;
+        }
+
+        .btn:hover {
+            background: #1d4ed8;
+        }
+
+        .danger {
+            background: #ef4444;
+        }
+
+        .danger:hover {
+            background: #dc2626;
+        }
+
+        .success {
+            background: #10b981;
+        }
+
+        .success:hover {
+            background: #059669;
+        }
+
+    </style>
+
 </head>
+
 <body>
 
-<h2>Welcome, {{ request.user.username }} 👋</h2>
+<!-- Top Navigation -->
+<div class="topbar">
+    <div class="brand">UAS System Dashboard</div>
+    <div class="user">Logged in as: {{ request.user.username }}</div>
+</div>
 
-<p>You are successfully logged in.</p>
+<!-- Main -->
+<div class="container">
 
-<ul>
-    <li><a href="/profile/">View Profile</a></li>
-    <li><a href="/logout/">Logout</a></li>
-</ul>
+    <div class="grid">
+
+        <div class="card">
+            <h3>Profile</h3>
+            <p>View and manage your account information.</p>
+        </div>
+
+        <div class="card">
+            <h3>Security</h3>
+            <p>Manage authentication and access control.</p>
+        </div>
+
+        <div class="card">
+            <h3>Role Access</h3>
+            <p>RBAC system controls your permissions.</p>
+        </div>
+
+    </div>
+
+    <!-- Actions -->
+    <div class="actions">
+        <a href="/profile/" class="btn success">View Profile</a>
+        <a href="/logout/" class="btn danger">Logout</a>
+    </div>
+
+</div>
 
 </body>
 </html>

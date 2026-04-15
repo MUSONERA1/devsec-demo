@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Access Denied</title>
+    
+    <style>
+        body {
+            margin: 0;
+            font-family: "Segoe UI", Arial, sans-serif;
+            background: linear-gradient(135deg, #1e293b, #0f172a);
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+        }
+
+        .container {
+            text-align: center;
+            background: #111827;
+            padding: 40px;
+            border-radius: 14px;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+            max-width: 500px;
+        }
+
+        .error-code {
+            font-size: 72px;
+            font-weight: bold;
+            color: #ef4444;
+            margin: 0 0 10px 0;
+        }
+
+        .error-title {
+            font-size: 28px;
+            margin: 0 0 10px 0;
+        }
+
+        .error-message {
+            color: #cbd5e1;
+            margin: 0 0 30px 0;
+            line-height: 1.6;
+        }
+
+        .actions {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+
+        a {
+            text-decoration: none;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: 0.2s;
+        }
+
+        .btn-primary {
+            background: #3b82f6;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #2563eb;
+        }
+
+        .btn-secondary {
+            background: #374151;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #4b5563;
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="container">
+    <div class="error-code">403</div>
+    <div class="error-title">Access Denied</div>
+    <div class="error-message">
+        <p>You do not have permission to access this page.</p>
+        <p>Please contact an administrator if you believe this is an error.</p>
+    </div>
+    
+    <div class="actions">
+        <a href="{% url 'dashboard' %}" class="btn-primary">Go to Dashboard</a>
+        <a href="{% url 'login' %}" class="btn-secondary">Login</a>
+    </div>
+</div>
+
+</body>
+</html>
