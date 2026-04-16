@@ -1,9 +1,10 @@
-from django.shortcuts import render, redirect
+from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth import login, logout, authenticate, update_session_auth_hash
 from django.contrib import messages
-from django.contrib.auth.models import Group
+from django.contrib.auth.models import Group, User
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponseForbidden
+from django.core.exceptions import PermissionDenied
 
 from .forms import (
     RegisterForm,
@@ -11,7 +12,14 @@ from .forms import (
     PasswordChangeForm,
     UserProfileForm
 )
-from .rbac import role_required, admin_required
+from .rbac import (
+    role_required, 
+    admin_required, 
+    owner_required,
+    check_object_ownership,
+    has_role
+)
+from .models import UserProfile
 
 
 # -------------------------
@@ -147,3 +155,121 @@ def admin_panel(request):
 # -------------------------
 def custom_403(request, exception=None):
     return render(request, "richard_musonera/403.html", status=403)
+
+
+# ==========================================
+# ADMIN PROFILE MANAGEMENT (IDOR Prevention)
+# ==========================================
+
+@admin_required
+def admin_view_users(request):
+    """List all users (admin only)."""
+    users = User.objects.all().prefetch_related('groups', 'profile').order_by('id')
+    context = {
+        'users': users,
+    }
+    return render(request, "richard_musonera/admin_users_list.html", context)
+
+
+@admin_required
+def admin_view_user_profile(request, user_id):
+    """View a specific user's profile (admin only with IDOR prevention)."""
+    # IDOR Prevention: Admin can view any user, but we still check it exists
+    user = get_object_or_404(User, pk=user_id)
+    
+    try:
+        profile = user.profile
+    except UserProfile.DoesNotExist:
+        profile = UserProfile.objects.create(user=user)
+    
+    roles = list(user.groups.values_list('name', flat=True))
+    
+    context = {
+        'target_user': user,
+        'profile': profile,
+        'roles': roles,
+    }
+    return render(request, "richard_musonera/admin_view_user_profile.html", context)
+
+
+@admin_required
+def admin_edit_user_profile(request, user_id):
+    """Edit a specific user's profile (admin only with IDOR prevention)."""
+    # IDOR Prevention: Only admin can edit other users' profiles
+    user = get_object_or_404(User, pk=user_id)
+    
+    try:
+        profile = user.profile
+    except UserProfile.DoesNotExist:
+        profile = UserProfile.objects.create(user=user)
+    
+    if request.method == "POST":
+        form = UserProfileForm(request.POST, instance=user)
+        if form.is_valid():
+            form.save()
+            messages.success(
+                request, 
+                f"Profile for {user.username} updated successfully."
+            )
+            return redirect('admin_view_user_profile', user_id=user.id)
+        else:
+            messages.error(request, "Please fix the errors below.")
+    else:
+        form = UserProfileForm(instance=user)
+
+    context = {
+        'form': form,
+        'target_user': user,
+        'profile': profile,
+    }
+    return render(request, "richard_musonera/admin_edit_user_profile.html", context)
+
+
+@admin_required
+def admin_assign_role(request, user_id):
+    """Assign a role to a user (admin only with IDOR prevention)."""
+    # IDOR Prevention: Only admin can modify other users' roles
+    user = get_object_or_404(User, pk=user_id)
+    
+    if request.method == "POST":
+        role_name = request.POST.get('role')
+        action = request.POST.get('action')  # 'add' or 'remove'
+        
+        if not role_name:
+            messages.error(request, "Role name is required.")
+            return redirect('admin_view_user_profile', user_id=user.id)
+        
+        # Validate role exists
+        try:
+            role = Group.objects.get(name=role_name)
+        except Group.DoesNotExist:
+            messages.error(request, f"Role '{role_name}' does not exist.")
+            return redirect('admin_view_user_profile', user_id=user.id)
+        
+        if action == 'add':
+            user.groups.add(role)
+            messages.success(
+                request, 
+                f"Role '{role_name}' assigned to {user.username}."
+            )
+        elif action == 'remove':
+            user.groups.remove(role)
+            messages.success(
+                request, 
+                f"Role '{role_name}' removed from {user.username}."
+            )
+        else:
+            messages.error(request, "Invalid action.")
+        
+        return redirect('admin_view_user_profile', user_id=user.id)
+    
+    # GET request - show role assignment form
+    user_roles = list(user.groups.values_list('name', flat=True))
+    all_roles = Group.objects.all()
+    
+    context = {
+        'target_user': user,
+        'user_roles': user_roles,
+        'all_roles': all_roles,
+    }
+    return render(request, "richard_musonera/admin_assign_role.html", context)

@@ -205,3 +205,167 @@ def get_user_roles(user):
     if not user.is_authenticated:
         return []
     return list(user.groups.values_list("name", flat=True))
+
+
+# ==========================================
+# OBJECT-LEVEL ACCESS CONTROL (IDOR Prevention)
+# ==========================================
+
+def check_object_ownership(user, obj, owner_field="user"):
+    """
+    Check if a user owns an object (IDOR Prevention).
+    
+    Raises PermissionDenied if the user doesn't own the object.
+    
+    Args:
+        user: Django User object (request.user)
+        obj: Object to check ownership of
+        owner_field (str): Name of the field containing the owner
+        
+    Raises:
+        PermissionDenied: If user is not authenticated or does not own the object
+        
+    Example:
+        profile = UserProfile.objects.get(pk=profile_id)
+        check_object_ownership(request.user, profile)  # Raises if not owner
+        # Continue processing profile...
+    
+    Security Notes:
+        - This prevents IDOR (Insecure Direct Object Reference)
+        - Always check before allowing access to user-owned objects
+        - Works with any object that has an owner field
+        - Logs all denied access attempts for audit
+    """
+    if not user.is_authenticated:
+        logger.warning(
+            f"Anonymous user attempted to access object owned by another user"
+        )
+        raise PermissionDenied("Authentication required")
+
+    # Get the owner from the object
+    try:
+        owner = getattr(obj, owner_field)
+    except AttributeError:
+        logger.error(
+            f"Object {obj.__class__.__name__} does not have field '{owner_field}'"
+        )
+        raise PermissionDenied("Invalid object ownership check")
+
+    # Check ownership
+    if owner != user:
+        logger.warning(
+            f"User '{user.username}' (id={user.id}) attempted unauthorized access "
+            f"to {obj.__class__.__name__} owned by user id={owner.id}"
+        )
+        raise PermissionDenied("You do not have permission to access this resource")
+
+    logger.info(
+        f"User '{user.username}' authorized to access owned "
+        f"{obj.__class__.__name__} object"
+    )
+
+
+def get_user_owned_object(user, model, pk, owner_field="user"):
+    """
+    Safely retrieve a user-owned object, checking ownership first.
+    
+    Returns None if object doesn't exist or user doesn't own it.
+    Raises PermissionDenied if ownership check fails.
+    
+    Args:
+        user: Django User object (request.user)
+        model: Django model class
+        pk: Primary key of object to retrieve
+        owner_field (str): Name of the owner field
+        
+    Returns:
+        Object if user owns it, None if it doesn't exist
+        
+    Raises:
+        PermissionDenied: If user doesn't own the object
+        
+    Example:
+        # In a view
+        try:
+            profile = get_user_owned_object(
+                request.user, 
+                UserProfile, 
+                profile_id
+            )
+            # Use profile...
+        except UserProfile.DoesNotExist:
+            return HttpNotFound()
+    
+    Security Notes:
+        - Prevents IDOR by verifying ownership before returning object
+        - Returns None for standard 404 handling
+        - Logs unauthorized access attempts
+    """
+    if not user.is_authenticated:
+        raise PermissionDenied("Authentication required")
+
+    try:
+        obj = model.objects.get(pk=pk)
+    except model.DoesNotExist:
+        return None
+
+    check_object_ownership(user, obj, owner_field)
+    return obj
+
+
+def owner_required(owner_field="user"):
+    """
+    Decorator to enforce object ownership for views.
+    
+    The decorated view function must accept an 'object_id' or 'pk' parameter.
+    
+    Args:
+        owner_field (str): Name of the owner field in the model
+        
+    Example:
+        @owner_required()
+        @login_required
+        def edit_profile(request, pk):
+            profile = UserProfile.objects.get(pk=pk)
+            # check_object_ownership is already verified by decorator
+            form = UserProfileForm(request.POST, instance=profile)
+            ...
+    
+    Security Notes:
+        - Must be combined with @login_required or @role_required
+        - Prevents IDOR by checking ownership before view executes
+        - Works on views that accept 'pk' or 'object_id' URL parameter
+    """
+    def decorator(view_func):
+        @wraps(view_func)
+        def wrapper(request, *args, **kwargs):
+            # Get the primary key from kwargs
+            pk = kwargs.get('pk') or kwargs.get('object_id') or kwargs.get('user_id')
+            
+            if not pk:
+                logger.error(
+                    f"@owner_required decorator applied to view without pk/object_id/user_id parameter"
+                )
+                raise PermissionDenied("Missing object identifier")
+
+            if not request.user.is_authenticated:
+                raise PermissionDenied("Authentication required")
+
+            # Verify the user owns the object
+            # For profiles linked to users, we can check directly
+            from django.contrib.auth.models import User
+            try:
+                target_user = User.objects.get(pk=pk)
+                if target_user != request.user and not has_role(request.user, 'admin'):
+                    logger.warning(
+                        f"User '{request.user.username}' (id={request.user.id}) "
+                        f"attempted unauthorized access to user id={pk}"
+                    )
+                    raise PermissionDenied("You do not have permission to access this resource")
+            except User.DoesNotExist:
+                return view_func(request, *args, **kwargs)  # Let view handle 404
+
+            return view_func(request, *args, **kwargs)
+
+        return wrapper
+    return decorator

@@ -16,4 +16,10 @@ urlpatterns = [
     path("admin-dashboard/", views.admin_dashboard, name="admin_dashboard"),
     path("admin-panel/", views.admin_panel, name="admin_panel"),
     path("instructor-panel/", views.instructor_panel, name="instructor_panel"),
+    
+    # Admin Profile Management (IDOR Prevention - Task #34)
+    path("admin/users/", views.admin_view_users, name="admin_view_users"),
+    path("admin/users/<int:user_id>/", views.admin_view_user_profile, name="admin_view_user_profile"),
+    path("admin/users/<int:user_id>/edit/", views.admin_edit_user_profile, name="admin_edit_user_profile"),
+    path("admin/users/<int:user_id>/assign-role/", views.admin_assign_role, name="admin_assign_role"),
 ]
