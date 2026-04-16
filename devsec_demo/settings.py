@@ -75,6 +75,10 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+# Media files configuration (for file uploads like profile pictures)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
 # Authentication redirects
 LOGIN_URL = '/login/'
 LOGIN_REDIRECT_URL = '/dashboard/'
@@ -104,3 +108,26 @@ DEFAULT_FROM_EMAIL = os.environ.get(
 # Password Reset Settings
 PASSWORD_RESET_TIMEOUT = 3600  # 1 hour token expiration
 PASSWORD_RESET_TOKEN_LIFESPAN = 3600  # Token valid for 1 hour
+
+# ==========================================
+# BRUTE-FORCE PROTECTION (Task #36)
+# ==========================================
+# Limits failed login attempts to prevent attacks
+# Uses Django's cache framework for tracking
+
+# Maximum failed login attempts before lockout
+MAX_LOGIN_ATTEMPTS = int(os.environ.get('MAX_LOGIN_ATTEMPTS', 5))
+
+# Lockout period in seconds (15 minutes = 900 seconds)
+LOCKOUT_PERIOD = int(os.environ.get('LOCKOUT_PERIOD', 900))
+
+# Cache configuration for login attempt tracking
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'unique-snowflake',
+        'OPTIONS': {
+            'MAX_ENTRIES': 1000
+        }
+    }
+}

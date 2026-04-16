@@ -56,6 +56,30 @@ def register_view(request):
 # LOGIN
 # -------------------------
 def login_view(request):
+    """
+    Login view with brute-force attack protection.
+    
+    Security:
+    - Tracks failed login attempts per IP address
+    - Locks out IP after 5 failed attempts for 15 minutes
+    - Prevents enumeration by giving same error for bad credentials
+    - Resets counter on successful login
+    
+    See rbac.py for brute-force protection utilities.
+    Task #36: Harden Login Flow Against Brute-Force Attacks
+    """
+    from richard_musonera.rbac import is_login_locked, track_failed_login, reset_login_attempts
+    
+    # Check if IP is locked out
+    if is_login_locked(request):
+        messages.error(
+            request, 
+            "Too many failed login attempts. "
+            "Your account has been temporarily locked for 15 minutes. "
+            "Please try again later."
+        )
+        return render(request, "richard_musonera/login.html", {"form": LoginForm()})
+    
     form = LoginForm()
 
     if request.method == "POST":
@@ -68,11 +92,27 @@ def login_view(request):
             user = authenticate(request, username=username, password=password)
 
             if user is not None:
+                # Successful login - reset failed attempts counter
+                reset_login_attempts(request, username)
                 login(request, user)
                 messages.success(request, "Logged in successfully.")
                 return redirect("dashboard")
-
-            messages.error(request, "Invalid credentials.")
+            else:
+                # Failed authentication - track the attempt
+                result = track_failed_login(request, username)
+                
+                if result['locked_out']:
+                    messages.error(
+                        request,
+                        "Too many failed login attempts. "
+                        "Your account has been temporarily locked for 15 minutes."
+                    )
+                else:
+                    messages.error(
+                        request,
+                        f"Invalid credentials. "
+                        f"({result['remaining']} attempt{'s' if result['remaining'] != 1 else ''} remaining)"
+                    )
         else:
             messages.error(request, "Invalid form input.")
 
@@ -200,20 +240,24 @@ def dashboard_view(request):
 @login_required(login_url='login')
 def profile_view(request):
     """Display and allow editing of user profile."""
+    # Get or create user profile
+    profile = request.user.userprofile if hasattr(request.user, 'userprofile') else None
+    
     if request.method == "POST":
-        form = UserProfileForm(request.POST, instance=request.user)
+        form = UserProfileForm(request.POST, request.FILES, instance=profile, user=request.user)
         if form.is_valid():
-            form.save()
+            form.save(user=request.user)
             messages.success(request, "Profile updated successfully.")
             return redirect("profile")
         else:
             messages.error(request, "Please fix the errors below.")
     else:
-        form = UserProfileForm(instance=request.user)
+        form = UserProfileForm(instance=profile, user=request.user)
 
     context = {
         'form': form,
-        'user': request.user
+        'user': request.user,
+        'profile': profile
     }
     return render(request, "richard_musonera/profile.html", context)
 

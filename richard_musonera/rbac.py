@@ -369,3 +369,202 @@ def owner_required(owner_field="user"):
 
         return wrapper
     return decorator
+
+
+# ==========================================
+# BRUTE-FORCE PROTECTION (Task #36)
+# ==========================================
+
+def get_client_ip(request):
+    """
+    Extract client IP address from request.
+    
+    Handles:
+    - Direct connection IP
+    - X-Forwarded-For header (proxies)
+    - X-Real-IP header (nginx)
+    
+    Args:
+        request: Django request object
+        
+    Returns:
+        str: Client IP address
+        
+    Security Notes:
+        - X-Forwarded-For can be spoofed in untrusted networks
+        - This is best-effort for rate limiting purposes only
+        - Real protection should include request validation
+    """
+    # Check for proxy headers
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded_for:
+        # X-Forwarded-For can contain multiple IPs, take the first
+        ip = x_forwarded_for.split(',')[0].strip()
+        return ip
+    
+    # Check X-Real-IP header (nginx)
+    x_real_ip = request.META.get('HTTP_X_REAL_IP')
+    if x_real_ip:
+        return x_real_ip
+    
+    # Fall back to direct connection IP
+    return request.META.get('REMOTE_ADDR', 'unknown')
+
+
+def track_failed_login(request, username):
+    """
+    Record a failed login attempt.
+    
+    Uses Django's cache to track failed attempts per IP address.
+    After MAX_LOGIN_ATTEMPTS failures within LOCKOUT_PERIOD,
+    the IP is temporarily locked out.
+    
+    Args:
+        request: Django request object
+        username: Username that failed to authenticate
+        
+    Returns:
+        dict: {'locked_out': bool, 'attempts': int, 'remaining': int}
+        
+    Security Configuration:
+        - MAX_LOGIN_ATTEMPTS: 5 failures (default)
+        - LOCKOUT_PERIOD: 900 seconds = 15 minutes (default)
+        - Tracks by IP address, not username (prevents enumeration)
+    
+    Example:
+        result = track_failed_login(request, username)
+        if result['locked_out']:
+            messages.error(request, f"Too many failed attempts. Try again in 15 minutes.")
+        else:
+            messages.error(request, f"Invalid credentials ({result['remaining']} tries left)")
+    
+    Audit Notes:
+        - Failed attempts are logged with IP and timestamp
+        - System prevents attacker enumeration by not disclosing failed username
+        - Legitimate users can retry after lockout period expires
+    """
+    from django.core.cache import cache
+    from django.conf import settings
+    
+    # Get configuration
+    MAX_LOGIN_ATTEMPTS = getattr(settings, 'MAX_LOGIN_ATTEMPTS', 5)
+    LOCKOUT_PERIOD = getattr(settings, 'LOCKOUT_PERIOD', 900)  # 15 minutes
+    
+    # Get client IP
+    client_ip = get_client_ip(request)
+    
+    # Create cache key for this IP
+    cache_key = f"login_attempts_{client_ip}"
+    lockout_key = f"login_locked_{client_ip}"
+    
+    # Check if already locked out
+    if cache.get(lockout_key):
+        logger.warning(
+            f"Login attempt from locked-out IP: {client_ip}, username: {username}"
+        )
+        return {
+            'locked_out': True,
+            'attempts': MAX_LOGIN_ATTEMPTS,
+            'remaining': 0
+        }
+    
+    # Increment failed attempt counter
+    attempts = cache.get(cache_key, 0)
+    attempts += 1
+    cache.set(cache_key, attempts, LOCKOUT_PERIOD)
+    
+    # Log the attempt
+    logger.warning(
+        f"Failed login attempt #{attempts} from IP {client_ip}, "
+        f"username: {username}"
+    )
+    
+    # Check if we've exceeded the limit
+    if attempts >= MAX_LOGIN_ATTEMPTS:
+        cache.set(lockout_key, True, LOCKOUT_PERIOD)
+        logger.warning(
+            f"IP {client_ip} locked out after {attempts} failed login attempts"
+        )
+        return {
+            'locked_out': True,
+            'attempts': attempts,
+            'remaining': 0
+        }
+    
+    return {
+        'locked_out': False,
+        'attempts': attempts,
+        'remaining': MAX_LOGIN_ATTEMPTS - attempts
+    }
+
+
+def is_login_locked(request):
+    """
+    Check if a client IP is currently locked out from login.
+    
+    Args:
+        request: Django request object
+        
+    Returns:
+        bool: True if locked out, False otherwise
+        
+    Example:
+        if is_login_locked(request):
+            return render(request, 'login.html', {
+                'locked_out': True,
+                'message': 'Too many failed attempts. Please try again later.'
+            })
+    
+    Security Notes:
+        - Check this BEFORE attempting authentication
+        - Prevents expensive password hash comparisons during brute-force
+        - Lockout is time-based and automatically expires
+    """
+    from django.core.cache import cache
+    
+    client_ip = get_client_ip(request)
+    lockout_key = f"login_locked_{client_ip}"
+    
+    is_locked = cache.get(lockout_key, False)
+    
+    if is_locked:
+        logger.info(
+            f"Login attempt blocked due to lockout: IP {client_ip}"
+        )
+    
+    return is_locked
+
+
+def reset_login_attempts(request, username):
+    """
+    Clear failed login attempts and lockout flag for a client IP after successful login.
+    
+    Args:
+        request: Django request object
+        username: Username that successfully authenticated
+        
+    Example:
+        user = authenticate(request, username=username, password=password)
+        if user is not None:
+            reset_login_attempts(request, username)
+            login(request, user)
+    
+    Security Notes:
+        - Call AFTER successful authentication
+        - Clears both attempt counter and lockout flag for this IP
+        - Allows legitimate users to recover if they had a brief brute-force period
+        - Prevents permanent lockout for valid users
+    """
+    from django.core.cache import cache
+    
+    client_ip = get_client_ip(request)
+    cache_key = f"login_attempts_{client_ip}"
+    lockout_key = f"login_locked_{client_ip}"
+    
+    # Clear both attempt counter and lockout flag
+    cache.delete(cache_key)
+    cache.delete(lockout_key)
+    
+    logger.info(
+        f"Login attempts and lockout cleared for IP {client_ip}, username: {username}"
+    )
