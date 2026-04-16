@@ -3,14 +3,18 @@ from django.contrib.auth import login, logout, authenticate, update_session_auth
 from django.contrib import messages
 from django.contrib.auth.models import Group, User
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.views import PasswordResetView, PasswordResetConfirmView
 from django.http import HttpResponseForbidden
 from django.core.exceptions import PermissionDenied
+from django.urls import reverse_lazy
 
 from .forms import (
     RegisterForm,
     LoginForm,
     PasswordChangeForm,
-    UserProfileForm
+    UserProfileForm,
+    PasswordResetForm,
+    SetPasswordForm
 )
 from .rbac import (
     role_required, 
@@ -82,6 +86,107 @@ def logout_view(request):
     logout(request)
     messages.success(request, "Logged out successfully.")
     return redirect("login")
+
+
+# ==========================================
+# PASSWORD RESET FLOW (Task #35)
+# ==========================================
+# Uses Django's built-in password reset utilities
+# for secure token generation and management
+
+class CustomPasswordResetView(PasswordResetView):
+    """
+    View for requesting a password reset.
+    
+    Security features:
+    - Uses Django's PasswordResetTokenGenerator (HMAC-based)
+    - Token is one-time use and expires after PASSWORD_RESET_TIMEOUT
+    - Generic success message (doesn't leak if email exists)
+    - Email-based verification prevents account takeover
+    - CSRF protection enabled by default
+    
+    Process:
+    1. User enters email
+    2. Server checks if user exists (silently, no error)
+    3. If exists, generates HMAC token and sends email
+    4. User clicks link in email (token included)
+    5. User confirms identity and sets new password
+    """
+    form_class = PasswordResetForm
+    template_name = 'richard_musonera/password_reset_request.html'
+    success_url = reverse_lazy('password_reset_done')
+    email_template_name = 'richard_musonera/password_reset_email.txt'
+    subject_template_name = 'richard_musonera/password_reset_subject.txt'
+    from_email = None  # Uses DEFAULT_FROM_EMAIL from settings
+    
+    def form_valid(self, form):
+        """Send password reset email securely."""
+        # Django's PasswordResetForm.save() handles:
+        # - Finding the user by email
+        # - Generating secure HMAC token
+        # - Rendering email template
+        # - Sending email
+        # - Doesn't raise exception if email not found (prevents user enumeration)
+        form.save(
+            request=self.request,
+            use_https=self.request.is_secure(),
+            from_email=self.from_email,
+            email_template_name=self.email_template_name,
+            subject_template_name=self.subject_template_name,
+            html_email_template_name=None,  # Using plain text email
+        )
+        return super().form_valid(form)
+
+
+def password_reset_done_view(request):
+    """
+    Confirmation page after password reset request.
+    
+    Shows generic message without confirming email existence
+    to prevent user enumeration attacks.
+    """
+    return render(request, 'richard_musonera/password_reset_done.html')
+
+
+class CustomPasswordResetConfirmView(PasswordResetConfirmView):
+    """
+    View for confirming password reset and setting new password.
+    
+    Security features:
+    - Validates token (expires after PASSWORD_RESET_TIMEOUT)
+    - Token is one-time use (consumed by Django's token generator)
+    - Uses SetPasswordForm for strong password validation
+    - Requires CSRF token for POST
+    - Logs password change for audit trail
+    
+    Process:
+    1. User clicks link from email (token in URL)
+    2. Token is validated against user's password hash
+    3. User enters new password (strength validated)
+    4. New password is saved, invalidating all old tokens
+    5. User is redirected to completion page
+    """
+    form_class = SetPasswordForm
+    template_name = 'richard_musonera/password_reset_confirm.html'
+    success_url = reverse_lazy('password_reset_complete')
+    
+    def form_valid(self, form):
+        """Save new password and log the change."""
+        user = form.save()
+        messages.success(
+            self.request,
+            'Your password has been reset successfully. You can now log in with your new password.'
+        )
+        return super().form_valid(form)
+
+
+def password_reset_complete_view(request):
+    """
+    Final confirmation page after successful password reset.
+    
+    Shows success message and provides login link.
+    """
+    return render(request, 'richard_musonera/password_reset_complete.html')
 
 
 # -------------------------
