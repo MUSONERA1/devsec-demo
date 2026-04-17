@@ -142,6 +142,11 @@
     <form method="POST" novalidate>
         {% csrf_token %}
 
+        <!-- Hidden 'next' parameter for safe redirect after registration -->
+        {% if next %}
+            <input type="hidden" name="next" value="{{ next }}">
+        {% endif %}
+
         <!-- Username -->
         <div class="form-group">
             <label>Username</label>

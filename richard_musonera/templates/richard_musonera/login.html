@@ -104,6 +104,31 @@
             text-decoration: none;
         }
 
+        a:hover {
+            text-decoration: underline;
+        }
+
+        .extra-options {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 12px;
+            font-size: 13px;
+        }
+
+        .forgot-password {
+            text-align: right;
+        }
+
+        .forgot-password a {
+            color: #fca5a5;
+            transition: color 0.2s;
+        }
+
+        .forgot-password a:hover {
+            color: #f87171;
+        }
+
     </style>
 
 </head>
@@ -125,6 +150,11 @@
     <form method="POST" novalidate>
         {% csrf_token %}
 
+        <!-- Hidden 'next' parameter for safe redirect after login -->
+        {% if next %}
+            <input type="hidden" name="next" value="{{ next }}">
+        {% endif %}
+
         <!-- Username -->
         <div class="form-group">
             <label>Username</label>
@@ -138,7 +168,10 @@
 
         <!-- Password -->
         <div class="form-group">
-            <label>Password</label>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <label>Password</label>
+                <a href="{% url 'password_reset' %}" class="forgot-password" style="font-size: 12px; color: #fca5a5;">Forgot?</a>
+            </div>
             {{ form.password }}
             {% if form.password.errors %}
                 <div class="error">

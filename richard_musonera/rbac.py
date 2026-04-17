@@ -568,3 +568,315 @@ def reset_login_attempts(request, username):
     logger.info(
         f"Login attempts and lockout cleared for IP {client_ip}, username: {username}"
     )
+
+
+# ==========================================
+# SAFE REDIRECT HANDLING (Task #38)
+# ==========================================
+
+def is_safe_redirect_url(url, allowed_hosts=None):
+    """
+    Validate if a redirect URL is safe (internal only, no external redirects).
+    
+    Prevents open redirect vulnerabilities by ensuring redirects only go to
+    internal URLs within the same domain.
+    
+    Args:
+        url (str): URL to validate
+        allowed_hosts (list): List of allowed hosts (defaults to Django's ALLOWED_HOSTS)
+        
+    Returns:
+        bool: True if URL is safe to redirect to, False otherwise
+        
+    Safe URL Examples:
+        - /dashboard/
+        - /profile/
+        - /admin/users/
+        
+    Unsafe URL Examples:
+        - https://example.com/
+        - //evil.com/phishing
+        - javascript:alert('xss')
+        - data:text/html,<script>
+        
+    Security Notes:
+        - Only allows relative URLs (starting with /) or URLs on allowed hosts
+        - Rejects protocol-relative URLs (//) which can bypass host checks
+        - Rejects javascript: and data: URLs
+        - Uses Django's built-in URL validation
+        
+    Examples:
+        # In a view
+        next_url = request.GET.get('next')
+        if is_safe_redirect_url(next_url):
+            return redirect(next_url)
+        return redirect('dashboard')
+    """
+    from django.utils.http import url_has_allowed_host_and_scheme
+    from django.conf import settings
+    
+    if not url:
+        return False
+    
+    # Strip whitespace
+    url = url.strip()
+    
+    # Reject empty strings
+    if not url:
+        return False
+    
+    # Reject javascript: and data: URIs (XSS prevention)
+    if url.lower().startswith(('javascript:', 'data:', 'vbscript:')):
+        logger.warning(f"Rejected redirect to potentially dangerous protocol: {url[:50]}")
+        return False
+    
+    # Reject protocol-relative URLs (//) which can bypass host checks
+    if url.startswith('//'):
+        logger.warning(f"Rejected protocol-relative redirect URL: {url[:50]}")
+        return False
+    
+    # Allow relative URLs (starting with /)
+    if url.startswith('/'):
+        return True
+    
+    # For absolute URLs, use Django's built-in URL validation
+    if allowed_hosts is None:
+        allowed_hosts = settings.ALLOWED_HOSTS
+    
+    # Django's url_has_allowed_host_and_scheme checks:
+    # - URL host is in ALLOWED_HOSTS
+    # - URL uses http/https scheme only
+    is_safe = url_has_allowed_host_and_scheme(
+        url,
+        allowed_hosts=allowed_hosts,
+        require_https=settings.SECURE_SSL_REDIRECT or not settings.DEBUG
+    )
+    
+    if not is_safe:
+        logger.warning(
+            f"Rejected redirect to external URL: {url[:100]}"
+        )
+    
+    return is_safe
+
+
+def get_safe_redirect(url, fallback_url='dashboard', allowed_hosts=None):
+    """
+    Get a validated redirect URL, falling back to a safe default.
+    
+    Convenience function to validate and redirect with a safe fallback.
+    
+    Args:
+        url (str): URL to redirect to
+        fallback_url (str): Safe URL to redirect to if url is invalid (URL name or path)
+        allowed_hosts (list): List of allowed hosts for validation
+        
+    Returns:
+        str: Safe redirect URL (either the validated url or fallback_url)
+        
+    Examples:
+        # In a view
+        next_url = request.GET.get('next', 'dashboard')
+        safe_url = get_safe_redirect(next_url, fallback_url='dashboard')
+        return redirect(safe_url)
+        
+        # With URL name
+        safe_url = get_safe_redirect(request.POST.get('return_to'), 'profile')
+        return redirect(safe_url)
+    
+    Security Notes:
+        - Always provide a safe fallback_url
+        - fallback_url should be a URL name (e.g. 'dashboard') or safe path
+        - Never trust user input for redirects without validation
+    """
+    if is_safe_redirect_url(url, allowed_hosts):
+        return url
+    
+    # Safe handling of None values - convert to string safely
+    url_str = str(url) if url else ''
+    logger.warning(
+        f"Using fallback redirect '{fallback_url}' for unsafe URL: {url_str[:100]}"
+    )
+    return fallback_url
+
+
+# ==========================================
+# AUDIT LOGGING UTILITIES
+# ==========================================
+
+def audit_log_auth_register(request, user, success=True, error_msg=None):
+    """
+    Log user registration event.
+    
+    Args:
+        request: Django request object
+        user: User who registered
+        success (bool): Whether registration succeeded
+        error_msg (str): Error description if failed
+    """
+    from richard_musonera.models import AuditLog
+    
+    AuditLog.log_event(
+        event_type='AUTH_REGISTER',
+        request=request,
+        user=user,
+        target_user=user,
+        success=success,
+        details={'username': user.username if user else 'N/A'},
+        error_msg=error_msg
+    )
+
+
+def audit_log_auth_login(request, username, success=True, error_msg=None):
+    """
+    Log login attempt event.
+    
+    Args:
+        request: Django request object
+        username (str): Username for login attempt
+        success (bool): Whether login succeeded
+        error_msg (str): Error description if failed
+    """
+    from django.contrib.auth.models import User
+    from richard_musonera.models import AuditLog
+    
+    event_type = 'AUTH_LOGIN_SUCCESS' if success else 'AUTH_LOGIN_FAILURE'
+    
+    # Get user if login was successful
+    user = None
+    if success:
+        try:
+            user = User.objects.get(username=username)
+        except User.DoesNotExist:
+            pass
+    
+    # Log only the username, not the related query
+    AuditLog.log_event(
+        event_type=event_type,
+        request=request,
+        user=user,
+        target_user=user,
+        success=success,
+        details={'username': username},
+        error_msg=error_msg
+    )
+
+
+def audit_log_auth_logout(request, user):
+    """
+    Log logout event.
+    
+    Args:
+        request: Django request object
+        user: User who logged out
+    """
+    from richard_musonera.models import AuditLog
+    
+    AuditLog.log_event(
+        event_type='AUTH_LOGOUT',
+        request=request,
+        user=user,
+        target_user=user,
+        success=True,
+        details={'username': user.username}
+    )
+
+
+def audit_log_password_change(request, user, success=True, error_msg=None):
+    """
+    Log password change event.
+    
+    Args:
+        request: Django request object
+        user: User who changed password
+        success (bool): Whether change succeeded
+        error_msg (str): Error description if failed
+    """
+    from richard_musonera.models import AuditLog
+    
+    AuditLog.log_event(
+        event_type='AUTH_PASSWORD_CHANGE',
+        request=request,
+        user=user,
+        target_user=user,
+        success=success,
+        details={'username': user.username},
+        error_msg=error_msg
+    )
+
+
+def audit_log_password_reset_request(request, username, success=True):
+    """
+    Log password reset request.
+    
+    Args:
+        request: Django request object
+        username (str): Username requesting reset
+        success (bool): Whether email was sent
+    """
+    from richard_musonera.models import AuditLog
+    
+    AuditLog.log_event(
+        event_type='AUTH_PASSWORD_RESET_REQUEST',
+        request=request,
+        user=None,
+        target_user=None,
+        success=success,
+        details={'username_requested': username}
+    )
+
+
+def audit_log_password_reset_confirm(request, user, success=True, error_msg=None):
+    """
+    Log password reset confirmation (actual password change).
+    
+    Args:
+        request: Django request object
+        user: User who confirmed password reset
+        success (bool): Whether reset succeeded
+        error_msg (str): Error description if failed
+    """
+    from richard_musonera.models import AuditLog
+    
+    AuditLog.log_event(
+        event_type='AUTH_PASSWORD_RESET_CONFIRM',
+        request=request,
+        user=user,
+        target_user=user,
+        success=success,
+        details={'username': user.username},
+        error_msg=error_msg
+    )
+
+
+def audit_log_role_change(request, admin_user, target_user, role_name, action, success=True, error_msg=None):
+    """
+    Log role assignment or removal.
+    
+    Args:
+        request: Django request object
+        admin_user: User performing the action (admin)
+        target_user: User whose role is being changed
+        role_name (str): Role name being added/removed
+        action (str): 'add' or 'remove'
+        success (bool): Whether action succeeded
+        error_msg (str): Error description if failed
+    """
+    from richard_musonera.models import AuditLog
+    
+    event_type = 'AUTHZ_ROLE_ADD' if action == 'add' else 'AUTHZ_ROLE_REMOVE'
+    
+    AuditLog.log_event(
+        event_type=event_type,
+        request=request,
+        user=admin_user,
+        target_user=target_user,
+        success=success,
+        details={
+            'admin': admin_user.username if admin_user else 'system',
+            'target_user': target_user.username,
+            'role': role_name,
+            'action': action
+        },
+        error_msg=error_msg
+    )

@@ -21,7 +21,16 @@ from .rbac import (
     admin_required, 
     owner_required,
     check_object_ownership,
-    has_role
+    has_role,
+    get_safe_redirect,
+    is_safe_redirect_url,
+    audit_log_auth_register,
+    audit_log_auth_login,
+    audit_log_auth_logout,
+    audit_log_password_change,
+    audit_log_password_reset_request,
+    audit_log_password_reset_confirm,
+    audit_log_role_change
 )
 from .models import UserProfile
 
@@ -30,6 +39,18 @@ from .models import UserProfile
 # REGISTER
 # -------------------------
 def register_view(request):
+    """
+    Register a new user account.
+    
+    Security:
+    - Validates and sanitizes 'next' parameter for safe redirects
+    - Prevents open redirect vulnerabilities
+    - New users assigned to 'user' role by default
+    - Redirect destination validated before use
+    
+    See rbac.py for safe redirect validation utilities.
+    Task #38: Fix unsafe redirect handling in authentication workflow
+    """
     form = RegisterForm()
 
     if request.method == "POST":
@@ -44,12 +65,28 @@ def register_view(request):
 
             login(request, user)
             messages.success(request, "Account created successfully.")
-            return redirect("dashboard")
+            
+            # ✅ Audit log: successful registration
+            audit_log_auth_register(request, user, success=True)
+            
+            # ✅ Task #38: Validate 'next' parameter for safe redirect
+            # Use default empty string to avoid None values
+            next_url = request.POST.get('next', '')
+            safe_redirect_url = get_safe_redirect(next_url, fallback_url='dashboard')
+            return redirect(safe_redirect_url)
 
         else:
+            # ✅ Audit log: failed registration
+            audit_log_auth_register(request, None, success=False, error_msg="Form validation failed")
             messages.error(request, "Please fix the errors below.")
 
-    return render(request, "richard_musonera/register.html", {"form": form})
+    # Prepare context with safe 'next' parameter
+    next_url = request.GET.get('next', '')
+    context = {
+        'form': form,
+        'next': next_url if is_safe_redirect_url(next_url) else ''
+    }
+    return render(request, "richard_musonera/register.html", context)
 
 
 # -------------------------
@@ -64,9 +101,12 @@ def login_view(request):
     - Locks out IP after 5 failed attempts for 15 minutes
     - Prevents enumeration by giving same error for bad credentials
     - Resets counter on successful login
+    - Validates and sanitizes 'next' parameter for safe redirects
+    - Prevents open redirect vulnerabilities
     
-    See rbac.py for brute-force protection utilities.
+    See rbac.py for brute-force protection and safe redirect utilities.
     Task #36: Harden Login Flow Against Brute-Force Attacks
+    Task #38: Fix unsafe redirect handling in authentication workflow
     """
     from richard_musonera.rbac import is_login_locked, track_failed_login, reset_login_attempts
     
@@ -96,8 +136,18 @@ def login_view(request):
                 reset_login_attempts(request, username)
                 login(request, user)
                 messages.success(request, "Logged in successfully.")
-                return redirect("dashboard")
+                
+                # ✅ Audit log: successful login
+                audit_log_auth_login(request, username, success=True)
+                
+                # ✅ Task #38: Validate 'next' parameter for safe redirect
+                # Use default empty string to avoid None values
+                next_url = request.POST.get('next', '')
+                safe_redirect_url = get_safe_redirect(next_url, fallback_url='dashboard')
+                return redirect(safe_redirect_url)
             else:
+                # ✅ Audit log: failed login attempt
+                audit_log_auth_login(request, username, success=False, error_msg="Invalid credentials")
                 # Failed authentication - track the attempt
                 result = track_failed_login(request, username)
                 
@@ -116,14 +166,29 @@ def login_view(request):
         else:
             messages.error(request, "Invalid form input.")
 
-    return render(request, "richard_musonera/login.html", {"form": form})
+    # Prepare context with safe 'next' parameter
+    next_url = request.GET.get('next', '')
+    context = {
+        'form': form,
+        'next': next_url if is_safe_redirect_url(next_url) else ''
+    }
+    return render(request, "richard_musonera/login.html", context)
 
 
 # -------------------------
 # LOGOUT
 # -------------------------
+# LOGOUT
+# -------------------------
 def logout_view(request):
+    """Logout user and audit the event."""
+    user = request.user
     logout(request)
+    
+    # ✅ Audit log: user logout
+    if user.is_authenticated:
+        audit_log_auth_logout(request, user)
+    
     messages.success(request, "Logged out successfully.")
     return redirect("login")
 
@@ -161,6 +226,9 @@ class CustomPasswordResetView(PasswordResetView):
     
     def form_valid(self, form):
         """Send password reset email securely."""
+        # Get email from form for audit logging
+        email = form.cleaned_data.get('email', '')
+        
         # Django's PasswordResetForm.save() handles:
         # - Finding the user by email
         # - Generating secure HMAC token
@@ -175,6 +243,10 @@ class CustomPasswordResetView(PasswordResetView):
             subject_template_name=self.subject_template_name,
             html_email_template_name=None,  # Using plain text email
         )
+        
+        # ✅ Audit log: password reset request (use email, not username for privacy)
+        audit_log_password_reset_request(self.request, email, success=True)
+        
         return super().form_valid(form)
 
 
@@ -217,6 +289,10 @@ class CustomPasswordResetConfirmView(PasswordResetConfirmView):
             self.request,
             'Your password has been reset successfully. You can now log in with your new password.'
         )
+        
+        # ✅ Audit log: successful password reset confirmation
+        audit_log_password_reset_confirm(self.request, user, success=True)
+        
         return super().form_valid(form)
 
 
@@ -234,25 +310,51 @@ def password_reset_complete_view(request):
 # -------------------------
 @role_required("user")
 def dashboard_view(request):
-    return render(request, "richard_musonera/dashboard.html")
+    """Dashboard view with real user data."""
+    # Get or create user profile
+    profile, created = UserProfile.objects.get_or_create(user=request.user)
+    
+    # Get user's roles/groups
+    user_groups = request.user.groups.all()
+    
+    # Prepare context with real data
+    context = {
+        'user': request.user,
+        'profile': profile,
+        'user_groups': user_groups,
+        'profile_picture_url': profile.profile_picture.url if profile.profile_picture else None,
+        'avatar_url': profile.avatar_url,
+        'bio': profile.bio,
+        'phone_number': profile.phone_number,
+        'department': profile.department,
+    }
+    
+    return render(request, "richard_musonera/dashboard.html", context)
 
 
 @login_required(login_url='login')
 def profile_view(request):
-    """Display and allow editing of user profile."""
-    # Get or create user profile
-    profile = request.user.userprofile if hasattr(request.user, 'userprofile') else None
+    """Display and allow editing of user profile with secure file handling."""
+    # Get or create user profile (related_name='profile')
+    profile, created = UserProfile.objects.get_or_create(user=request.user)
     
     if request.method == "POST":
-        form = UserProfileForm(request.POST, request.FILES, instance=profile, user=request.user)
+        # Pass request for audit logging of file uploads
+        form = UserProfileForm(
+            request.POST, 
+            request.FILES, 
+            instance=profile, 
+            user=request.user,
+            request=request
+        )
         if form.is_valid():
-            form.save(user=request.user)
+            form.save(user=request.user, request=request)
             messages.success(request, "Profile updated successfully.")
             return redirect("profile")
         else:
             messages.error(request, "Please fix the errors below.")
     else:
-        form = UserProfileForm(instance=profile, user=request.user)
+        form = UserProfileForm(instance=profile, user=request.user, request=request)
 
     context = {
         'form': form,
@@ -272,8 +374,15 @@ def password_change_view(request):
             # Keep the user logged in after password change
             update_session_auth_hash(request, user)
             messages.success(request, "Your password has been changed successfully.")
+            
+            # ✅ Audit log: successful password change
+            audit_log_password_change(request, user, success=True)
+            
             return redirect("profile")
         else:
+            # ✅ Audit log: failed password change attempt
+            audit_log_password_change(request, request.user, success=False, 
+                                    error_msg="Form validation failed")
             messages.error(request, "Please correct the errors below.")
     else:
         form = PasswordChangeForm(request.user)
@@ -343,7 +452,7 @@ def admin_view_user_profile(request, user_id):
 
 @admin_required
 def admin_edit_user_profile(request, user_id):
-    """Edit a specific user's profile (admin only with IDOR prevention)."""
+    """Edit a specific user's profile (admin only with IDOR prevention and secure uploads)."""
     # IDOR Prevention: Only admin can edit other users' profiles
     user = get_object_or_404(User, pk=user_id)
     
@@ -353,9 +462,18 @@ def admin_edit_user_profile(request, user_id):
         profile = UserProfile.objects.create(user=user)
     
     if request.method == "POST":
-        form = UserProfileForm(request.POST, instance=user)
+        # Pass both instance (profile) and user for proper CSRF handling
+        # Pass request for audit logging of file uploads
+        form = UserProfileForm(
+            request.POST, 
+            request.FILES,
+            instance=profile, 
+            user=user,
+            request=request
+        )
         if form.is_valid():
-            form.save()
+            # Pass user parameter to save both User and UserProfile
+            form.save(user=user, request=request)
             messages.success(
                 request, 
                 f"Profile for {user.username} updated successfully."
@@ -364,7 +482,8 @@ def admin_edit_user_profile(request, user_id):
         else:
             messages.error(request, "Please fix the errors below.")
     else:
-        form = UserProfileForm(instance=user)
+        # Pass user parameter for proper form initialization  
+        form = UserProfileForm(instance=profile, user=user, request=request)
 
     context = {
         'form': form,
@@ -401,12 +520,18 @@ def admin_assign_role(request, user_id):
                 request, 
                 f"Role '{role_name}' assigned to {user.username}."
             )
+            # ✅ Audit log: role added
+            audit_log_role_change(request, request.user, user, role_name, 'add', success=True)
+            
         elif action == 'remove':
             user.groups.remove(role)
             messages.success(
                 request, 
                 f"Role '{role_name}' removed from {user.username}."
             )
+            # ✅ Audit log: role removed
+            audit_log_role_change(request, request.user, user, role_name, 'remove', success=True)
+            
         else:
             messages.error(request, "Invalid action.")
         

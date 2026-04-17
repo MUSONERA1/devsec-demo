@@ -206,6 +206,17 @@
                 <div class="info-value">{{ target_user.date_joined|date:"M d, Y" }}</div>
             </div>
 
+            <div class="info-section">
+                <div class="info-label">Bio</div>
+                <div class="info-value">
+                    {% if profile.bio %}
+                        {{ profile.bio }}
+                    {% else %}
+                        <span style="color: #9ca3af;">No bio provided</span>
+                    {% endif %}
+                </div>
+            </div>
+
             <div class="actions">
                 <a href="{% url 'admin_edit_user_profile' target_user.id %}" class="btn btn-primary">
                     Edit Profile
